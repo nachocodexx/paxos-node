@@ -1,0 +1,8 @@
+// PROPOSE COMMAND
+{
+  "nodeId":"px-1"
+  "proposalNumber":0,
+  "fileId":"f4ffef41-b942-4b93-aa8b-9358ca0c97f2",
+  "userId":"f4ffef41-b942-4b93-aa8b-9358ca0c97f2",
+  "timestamp":0
+}
