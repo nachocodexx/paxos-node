@@ -6,7 +6,11 @@ package mx.cinvestav
 
 import breeze.linalg.DenseVector
 import cats.data.EitherT
-import cats.effect.std.Queue
+import mx.cinvestav.commons.events.SavedMetadata
+
+import scala.collection.mutable
+import scala.collection.immutable
+//import cats.effect.std.Queue
 import cats.effect.{IO, Ref}
 import dev.profunktor.fs2rabbit.interpreter.RabbitClient
 import dev.profunktor.fs2rabbit.model.AMQPConnection
@@ -15,8 +19,6 @@ import mx.cinvestav.commons.events.Event
 import mx.cinvestav.config.DefaultConfig
 import mx.cinvestav.utils.v2.PublisherV2
 import org.typelevel.log4cats.Logger
-
-import java.util
 import java.util.UUID
 
 object Declarations {
@@ -24,12 +26,26 @@ object Declarations {
   trait PaxosError extends NodeError
 //  case class
 
-  case class PaxosNodeDoesNotExist(nodeId:String) extends PaxosError {
+  case class DecodedValueError(message:String) extends PaxosError {
+    override def getMessage: String = s"Fail to decode the proposal value: $message"
+  }
+
+  case class ProposedValueNotFound(proposalNumber: ProposalNumber) extends PaxosError {
+    override def getMessage: String = s"Proposed value not found for $proposalNumber"
+  }
+  case class ReplyToPropertyNotFound() extends PaxosError {
+    override def getMessage: String = s"replyTo property not found"
+  }
+  case class PaxosNodeNotFound(nodeId:String) extends PaxosError {
     override def getMessage: String = s"Paxos node($nodeId) does not exist"
   }
   case class LowerProposalNumber(newProposal:ProposalNumber,oldProposal:ProposalNumber) extends PaxosError {
     override def getMessage: String = s"Proposal number $newProposal must be greater than previous proposal number $oldProposal"
   }
+  case class PublisherNotFound(publisherId:String) extends PaxosError {
+    override def getMessage: String = s"Publisher($getMessage) does not exist"
+  }
+
   type MaybeF[A] = EitherT[IO,NodeError,A]
   def liftFF[A] = EitherT.liftF[IO,NodeError,A](_)
 //  case class Event
@@ -61,15 +77,6 @@ object Declarations {
                         state:Ref[IO,NodeState]
                         )
 
-//  sealed trait Operation
-//  case object Add extends Operation {
-//    override def toString: String = "ADD"
-//  }
-//  case object Remove extends Operation{
-//    override def toString: String = "REMOVE"
-//  }
-
-//  case class Record(operation:Operation,data:Json)
 
   case class NodeState(
                         paxosNode: List[PaxosNode] = Nil,
@@ -78,9 +85,9 @@ object Declarations {
                         isAcceptor:Boolean=true,
                         isLearner:Boolean=true,
                         maxProposalIds:Map[String,ProposalNumber] = Map.empty[String,ProposalNumber],
-                        log: List[Json] = Nil,
-                        proposes:Map[ProposalNumber,Int] = Map.empty[ProposalNumber,Int],
-                        eventLog:Queue[IO,Event]
+                        promisesCounter:Map[ProposalNumber,Int] = Map.empty[ProposalNumber,Int],
+                        proposedValues:Map[ProposalNumber,SavedMetadata] = Map.empty[ProposalNumber,SavedMetadata],
+                        eventLog:immutable.Queue[Event]
                       ){
 
 //    SET FILE_0 sn0,sn1,sn2 0
@@ -94,26 +101,48 @@ object Declarations {
     final val PREPARE:String = "PREPARE"
     final val PROMISE:String = "PROMISE"
     final val COMMIT:String = "COMMIT"
+    final val ACCEPT:String = "ACCEPT"
+    final val ACCEPTED:String = "ACCEPTED"
   }
   object Events {
     //    sealed trait Event
-    case class Proposed(proposalNumber: Int, timestamp: Long, vc: DenseVector[Int], userId: UUID) extends Event
-
-    case class Promised(proposalNumber: Int, timestamp: Long, vc: DenseVector[Int], userId: UUID) extends Event
-
-    case class Committed(proposalNumber: Int, timestamp: Long, vc: DenseVector[Int], userId: UUID) extends Event
+//    case class Proposed(proposalNumber: Int, timestamp: Long, vc: DenseVector[Int], userId: UUID) extends Event
+//
+//    case class Promised(proposalNumber: Int, timestamp: Long, vc: DenseVector[Int], userId: UUID) extends Event
+//
+//    case class Committed(proposalNumber: Int, timestamp: Long, vc: DenseVector[Int], userId: UUID) extends Event
   }
   object payloads {
-    case class Propose(fileId:String, userId:String, timestamp:Long)
+    case class Propose(
+                        fileId:String,
+                        value:String,
+                        timestamp:Long
+                      )
     case class Prepare(
                         proposerId:String,
                         proposalNumber: ProposalNumber,
                         fileId:String,
-                        userId:String,
                         timestamp:Long
                       )
-    case class Promise(nodeId:String,proposalNumber: ProposalNumber,fileId:String,timestamp:Long)
-    case class Commit(proposalNumber: ProposalNumber,timestamp:Long)
+    case class Promise(
+                        nodeId:String,
+                        proposalNumber: ProposalNumber,
+                        fileId:String,
+                        relativeValue:String,
+                        timestamp:Long
+                      )
+    case class Accept(
+                       proposalNumber: ProposalNumber,
+                       fileId:String,
+                       value:String,
+                       timestamp:Long
+                     )
+    case class Accepted (
+                          proposalNumber: ProposalNumber,
+                          fileId:String,
+                          value:String,
+                          timestamp:Long
+                        )
   }
 //  case class PrepareP()
 

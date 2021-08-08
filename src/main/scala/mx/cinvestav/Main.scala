@@ -20,6 +20,8 @@ import breeze.linalg._
 import cats.effect.std.Queue
 import mx.cinvestav.commons.events.Event
 
+import scala.collection.{immutable, mutable}
+
 object Main extends IOApp{
   implicit val config: DefaultConfig           = ConfigSource.default.loadOrThrow[DefaultConfig]
   implicit val rabbitMqConfig: Fs2RabbitConfig = RabbitMQUtils.dynamicRabbitMQConfig(config.rabbitmq)
@@ -29,7 +31,7 @@ object Main extends IOApp{
     val client = ctx.rabbitContext.client
     client.createChannel(connection) .use{implicit  channel =>
       for {
-        _                 <- ctx.logger.info("CONSUMMING")
+        _                 <- ctx.logger.debug("START CONSUMING")
         (_acker,consumer) <- ctx.rabbitContext.client.createAckerConsumer(queueName = queueName)
         _ <- consumer.evalMap{ implicit envelope=>
           val maybeCommandId = envelope.properties.headers.get("commandId")
@@ -39,7 +41,9 @@ object Main extends IOApp{
               commandId match {
                 case AmqpFieldValue.StringVal(value) if value == commandsIds.PROPOSE => CommandHandlers.propose()
                 case AmqpFieldValue.StringVal(value) if value == commandsIds.PREPARE => CommandHandlers.prepare()
-                case AmqpFieldValue.StringVal(value) if value == "PROMISE" => CommandHandlers.promise()
+                case AmqpFieldValue.StringVal(value) if value == commandsIds.PROMISE => CommandHandlers.promise()
+                case AmqpFieldValue.StringVal(value) if value == commandsIds.ACCEPT => CommandHandlers.accept()
+                case AmqpFieldValue.StringVal(value) if value == commandsIds.ACCEPTED => CommandHandlers.accepted()
               }
             case None =>
               for{
@@ -65,7 +69,7 @@ object Main extends IOApp{
           //        _____________________________________________________
           rabbitContext    = RabbitContext(client = client,connection=connection)
           //        _____________________________________________________
-          q <- Queue.bounded[IO,Event](capacity = 100)
+//          q <- Queue.bounded[IO,Event](capacity = 100)
           //        _____________________________________________________
           paxosPublishers = config
             .paxosNodes
@@ -76,9 +80,10 @@ object Main extends IOApp{
             }
 //            .map((_.,PublisherV2(_)))
           //        _____________________________________________________
+          eventLog  = immutable.Queue.empty[Event]
           initState    = NodeState(
             paxosNode = config.paxosNodes,
-            eventLog = q,
+            eventLog = eventLog,
             paxosPublishers = paxosPublishers
           )
           _ <- Logger[IO].info(initState.toString)

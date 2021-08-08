@@ -15,13 +15,44 @@ import mx.cinvestav.utils.v2.encoders._
 import io.circe._
 import io.circe.syntax._
 import io.circe.generic.auto._
+import mx.cinvestav.commons.events.SavedMetadata
 import org.typelevel.log4cats.Logger
 
 import java.util.UUID
 
 object Helpers {
 
-  def sendPrepare(proposalNumber: ProposalNumber,fileId:UUID,userId:UUID)(implicit ctx:NodeContext) = {
+  def sendAccept(proposalNumber: ProposalNumber,value:SavedMetadata,fileId:UUID)(implicit ctx:NodeContext): EitherT[IO, NodeError, Unit] = {
+
+    type E                = NodeError
+    val maybeCurrentState = liftFF[NodeState](ctx.state.get)
+    implicit val logger   = ctx.logger
+    val L                 = Logger.eitherTLogger[IO,E]
+//  __________________________________________________________
+    val app = for {
+      currentState <- maybeCurrentState
+      timestamp   <- liftFF[Long](IO.realTime.map(_.toSeconds))
+//      _ <- L.info(s"ACCEPT $proposalNumber")
+//   ___________________________________________________________________
+      paxosNodes       = currentState.paxosPublishers.filter(_._1 != ctx.config.nodeId).values.toList
+//   ___________________________________________________________________
+      props            = AmqpProperties(
+        headers = Map("commandId"->StringVal(commandsIds.ACCEPT)),
+        replyTo = ctx.config.nodeId.some
+      )
+      messagePayload = payloads.Accept(
+        proposalNumber = proposalNumber,
+        fileId         = fileId.toString,
+        value          = value.asJson.noSpaces,
+        timestamp      = timestamp
+      ).asJson.noSpaces
+      message        = AmqpMessage(payload=messagePayload,properties = props)
+      _              <- liftFF[Unit](paxosNodes.traverse(_.publish(message)).void)
+      _              <- L.debug(s"SENT ACCEPT_VALUE ${paxosNodes.length} ACCEPTORS")
+    } yield ()
+    app
+  }
+  def sendPrepare(proposalNumber: ProposalNumber,fileId:UUID)(implicit ctx:NodeContext) = {
     type E                = NodeError
     val maybeCurrentState = liftFF[NodeState](ctx.state.get)
     implicit val logger   = ctx.logger
@@ -30,18 +61,21 @@ object Helpers {
       timestamp        <- liftFF[Long](IO.realTime.map(_.toSeconds))
       currentState     <- maybeCurrentState
       paxosNodes       = currentState.paxosPublishers.filter(_._1 != ctx.config.nodeId).values.toList
-      props            = AmqpProperties(headers = Map("commandId"->StringVal(commandsIds.PREPARE)))
+//    Prepare message
+      props            = AmqpProperties(
+        headers = Map("commandId"->StringVal(commandsIds.PREPARE)),
+        replyTo = ctx.config.nodeId.some
+      )
       messagePayload   = payloads.Prepare(
-        proposerId         = ctx.config.nodeId,
+        proposerId     = ctx.config.nodeId,
         proposalNumber = proposalNumber,
         fileId         = fileId.toString,
-        timestamp      = timestamp,
-        userId         = userId.toString
+        timestamp      = timestamp
       ).asJson.noSpaces
       message = AmqpMessage(payload= messagePayload,properties = props)
       //     _________________________________________________________________
       _                <- liftFF[Unit](paxosNodes.traverse(_.publish(message) ).void)
-      _                <- L.info(s"SEND_PREPARE to ${paxosNodes.length} ACCEPTORS")
+      _                <- L.debug(s"SEND_PREPARE to ${paxosNodes.length} ACCEPTORS")
     } yield ()
 
     app
